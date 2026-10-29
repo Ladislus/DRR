@@ -1,0 +1,9 @@
+CMAKE_MINIMUM_REQUIRED( VERSION 3.23 )
+
+PROJECT(
+    "DRR"
+    DESCRIPTION "Doxygen Requirement Reporter"
+    LANGUAGES CXX
+)
+
+ADD_EXECUTABLE( Test "${CMAKE_CURRENT_SOURCE_DIR}/sources/main.cpp" )
