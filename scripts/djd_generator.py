@@ -47,22 +47,32 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
-import sys
+
 import xml.etree.ElementTree as ET
+
+from sys         import exit as sexit
+from re          import compile as regex_compile, split as regex_split
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib     import Path
+
+from rich.console import Console
+
+CONSOLE = Console()
+
+from custom_logging import setup_logging
+
+LOGGER = setup_logging( 'RequirementGenerator' )
 
 # Test fixture class naming convention, e.g. TC_01_ServiceInit -- only used
 # to sanity-check where @verifies shows up, never to find requirement IDs.
-TEST_CASE_RE = re.compile(r"^TC_\d+_")
+TEST_CASE_RE = regex_compile(r"^TC_\d+_")
 
 REQUIREMENT_KIND = "requirement"
 REQUIREMENT_REFID_PREFIX = "requirement_"
 
 # "!partial(3) rest of the description" -- must be the very first thing in
 # the @satisfies short text (i.e. right after the requirement ID).
-PARTIAL_MARKER_RE = re.compile(r"^!partial\(\s*(\d+)\s*\)\s*")
+PARTIAL_MARKER_RE = regex_compile(r"^!partial\(\s*(\d+)\s*\)\s*")
 PARTIAL_MARKER_PREFIX = "!partial"
 
 
@@ -114,7 +124,7 @@ def load_index(xml_dir: Path):
     """Return (all_compound_refids, {req_id: refid} for kind="requirement")."""
     index_path = xml_dir / "index.xml"
     if not index_path.is_file():
-        sys.exit(f"error: {index_path} not found -- did you set "
+        sexit(f"error: {index_path} not found -- did you set "
                   f"GENERATE_XML = YES (and build) before running this?")
 
     root = ET.parse(index_path).getroot()
@@ -176,7 +186,7 @@ def _parse_satisfies_text(raw_text: str, req_id: str, location: str) -> tuple[in
     if m:
         return int(m.group(1)), stripped[m.end():].strip()
     if stripped.startswith(PARTIAL_MARKER_PREFIX):
-        sys.exit(f"error: {location}: malformed !partial(...) marker on "
+        sexit(f"error: {location}: malformed !partial(...) marker on "
                   f"'{req_id}': {stripped!r}")
     return None, stripped
 
@@ -212,9 +222,7 @@ def collect_satisfies_and_verifies(xml_dir: Path, all_refids: list[str],
             for req_el in verifies_el.findall("requirement"):
                 req_id = _requirement_id_from_refid(req_el.get("refid", ""), requirements_by_refid)
                 if not TEST_CASE_RE.match(compound_name):
-                    print(f"warning: @verifies found on '{compound_name}', which "
-                          f"doesn't look like a test class (expected TC_NN_Name)",
-                          file=sys.stderr)
+                    LOGGER.warning( f'@verifies found on "{ compound_name }", which does not look like a test class ( expected TC_NN_Name )' )
                 tested.setdefault(req_id, set()).add(compound_name)
 
     return fragments, {req_id: sorted(names) for req_id, names in tested.items()}
@@ -230,14 +238,12 @@ def resolve_implementation_status(req_id: str, frags: list[SatisfiesFragment]) -
     if len(declared) > 1:
         detail = ", ".join(f"{f.location}=!partial({f.declared_total})"
                             for f in frags if f.declared_total is not None)
-        sys.exit(f"error: '{req_id}' has mismatching !partial(...) totals: {detail}")
+        sexit(f"error: '{req_id}' has mismatching !partial(...) totals: {detail}")
 
     required = declared.pop() if declared else 1
     found = len(frags)
     if found > required:
-        print(f"warning: '{req_id}' has {found} @satisfies occurrences but "
-              f"declares !partial({required}) -- treating as fully implemented",
-              file=sys.stderr)
+        LOGGER.warning( f'"{ req_id }" has { found } @satisfies occurrences but declares !partial( { required } ) -- treating as fully implemented' )
 
     return ImplementationStatus(found=found, required=required, fragments=frags)
 
@@ -247,7 +253,7 @@ def resolve_implementation_status(req_id: str, frags: list[SatisfiesFragment]) -
 # --------------------------------------------------------------------------
 
 def _natural_key(req_id: str):
-    return [int(tok) if tok.isdigit() else tok for tok in re.split(r"(\d+)", req_id)]
+    return [int(tok) if tok.isdigit() else tok for tok in regex_split(r"(\d+)", req_id)]
 
 
 def build_rows(xml_dir: Path, requirements_by_id: dict[str, str],
@@ -257,8 +263,7 @@ def build_rows(xml_dir: Path, requirements_by_id: dict[str, str],
 
     unknown = (set(fragments) | set(tested)) - known_ids
     for req_id in sorted(unknown):
-        print(f"warning: '{req_id}' is referenced by @satisfies/@verifies but "
-              f"has no matching @requirement", file=sys.stderr)
+        LOGGER.warning( f'"{ req_id }" is referenced by @satisfies/@verifies but has no matching @requirement' )
 
     rows = []
     for req_id in sorted(requirements_by_id, key=_natural_key):
@@ -364,9 +369,8 @@ def write_excel(rows: list[RequirementRow], out_path: Path, with_description: bo
         from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
     except ImportError:
-        print("error: --output-xlsx requires the 'openpyxl' package "
-              "(pip install openpyxl)", file=sys.stderr)
-        sys.exit(1)
+        LOGGER.critical( '--output-xlsx requires the "openpyxl" package pip install openpyxl)' )
+        sexit(1)
 
     total, n_impl, n_partial, n_test = _summary(rows)
 
@@ -464,35 +468,33 @@ def main() -> None:
 
     all_refids, requirements_by_id = load_index(args.xml_dir)
     if not requirements_by_id:
-        print(f"warning: no @requirement compounds found in {args.xml_dir}/index.xml "
-              f"-- is GENERATE_REQUIREMENTS enabled (it's YES by default) and did "
-              f"you rebuild after adding @requirement blocks?", file=sys.stderr)
+        LOGGER.warning( f'no @requirement compounds found in { args.xml_dir }/index.xml -- is GENERATE_REQUIREMENTS enabled (it is YES by default) and did you rebuild after adding @requirement blocks?' )
 
     fragments, tested = collect_satisfies_and_verifies(
         args.xml_dir, all_refids, requirements_by_id)
     rows = build_rows(args.xml_dir, requirements_by_id, fragments, tested)
 
     if args.output_md:
-        write_markdown(rows, args.output_md, args.with_description)
-        print(f"Wrote {args.output_md}")
+        with CONSOLE.status( '[bold magenta]Generating markdown...' ):
+            write_markdown(rows, args.output_md, args.with_description)
+        LOGGER.info( f'Wrote "{ args.output_md }"' )
     if args.output_xlsx:
-        write_excel(rows, args.output_xlsx, args.with_description)
-        print(f"Wrote {args.output_xlsx}")
+        with CONSOLE.status( '[bold magenta]Generating xlsx...' ):
+            write_excel(rows, args.output_xlsx, args.with_description)
+        LOGGER.info( f'Wrote "{ args.output_xlsx }"' )
 
     total, n_impl, n_partial, n_test = _summary(rows)
     if total:
         pct_impl = 100 * n_impl / total
         pct_test = 100 * n_test / total
-        print(f"Implemented: {n_impl}/{total} ({pct_impl:.0f}%)"
-              + (f", partially: {n_partial}" if n_partial else ""))
-        print(f"Tested:      {n_test}/{total} ({pct_test:.0f}%)")
+        LOGGER.info( f'Implemented: { n_impl } / { total } ( {pct_impl:.0f}% )' + ( f', partially: { n_partial }' if n_partial else '' ) )
+        LOGGER.info( f'Tested:      { n_test } / { total } ( {pct_test:.0f}% )' )
 
         if args.fail_under is not None:
             avg = (pct_impl + pct_test) / 2
             if avg < args.fail_under:
-                print(f"error: coverage {avg:.0f}% is below --fail-under "
-                      f"{args.fail_under:.0f}%", file=sys.stderr)
-                sys.exit(1)
+                LOGGER.critical( f'coverage {avg:.0f}% is below --fail-under {args.fail_under:.0f}%' )
+                sexit(1)
 
 
 if __name__ == "__main__":
