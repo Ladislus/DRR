@@ -1,8 +1,21 @@
-from datetime import datetime
-from logging  import Logger, Formatter, StreamHandler, FileHandler, LogRecord, CRITICAL, ERROR, WARNING, INFO, DEBUG, disable as disable_logging, getLogger, getLevelNamesMapping
-from pathlib  import Path
-from sys      import stdout
-from tempfile import gettempdir
+from datetime  import datetime
+from logging   import Logger, Formatter, StreamHandler, FileHandler, LogRecord, CRITICAL, ERROR, WARNING, INFO, DEBUG, disable as disable_logging, getLogger, getLevelNamesMapping
+from pathlib   import Path
+from sys       import stdout
+from tempfile  import gettempdir
+from threading import Lock
+
+_console = None
+_lock    = Lock()
+
+def CONSOLE():
+    with _lock:
+        global _console
+        if _console is None:
+            from rich.console import Console
+            _console = Console()
+    return _console
+
 
 class CustomDater( Formatter ):
     # Completely ignore the provided format
@@ -82,7 +95,7 @@ def setup_logging(
         logger.propagate = False
 
     # Compute lowest level
-    active_levels = []
+    active_levels: list[ int ] = []
     if console_level:
         active_levels.append( getLevelNamesMapping().get( console_level.upper(), INFO ) )
     if file_level:
@@ -98,6 +111,7 @@ def setup_logging(
                 from rich.highlighter import NullHighlighter
 
                 console_handler = RichHandler(
+                    console         = CONSOLE(),
                     show_time       = False,
                     show_level      = False,
                     show_path       = False,
